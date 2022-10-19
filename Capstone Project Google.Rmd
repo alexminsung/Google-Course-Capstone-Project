@@ -1,0 +1,127 @@
+---
+title: "case_study_1"
+output: pdf_document
+date: '2022-09-23'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(geosphere)
+library(corrplot)
+
+# reads all the csv files in the working directory iteratively run read_csv()
+files <- list.files(pattern="*.csv")
+# afterwards, bind the datasets together into one big dataset
+bicycle_data <- lapply(files, read_csv) %>% bind_rows()
+
+# converting start time and end time to Y-m-d H:M datetime format
+bicycle_data <- bicycle_data %>% mutate(started_at = as.POSIXct(started_at, format="%Y-%m-%d %H:%M"), 
+                        ended_at = as.POSIXct(ended_at, format="%Y-%m-%d %H:%M"), 
+                        distance = distHaversine(cbind(start_lng, start_lat), cbind(end_lng, end_lat)),
+                        ride_length = difftime(ended_at, started_at) / 3600)
+
+# duplicate dataset
+bicycle_data_v2 <- bicycle_data
+                        
+# converting ride duration to number of hours (in 2 decimal places)
+# (seconds were not transferred from the xlsx file so that's why we have seconds in here but not in start/end time)
+bicycle_data$ride_length <- round(as.numeric(difftime(bicycle_data$ended_at, bicycle_data$started_at)) / 3600, 2)
+
+# changing day_of_week from the numeric to its character counterpart
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 1, "Sunday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 2, "Monday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 3, "Tuesday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 4, "Wednesday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 5, "Thursday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 6, "Friday"))
+bicycle_data_v2 <- bicycle_data_v2 %>% mutate(day_of_week = replace(day_of_week,day_of_week == 7, "Saturday"))
+
+```
+
+```{r}
+
+# time series plot of ride duration over the past 12 months
+bicycle_data_v2 %>% group_by(started_at, member_casual) %>% summarise(median_ride_length = median(ride_length)) %>% na.omit() %>% ggplot(aes(x = started_at, y = median_ride_length, col = member_casual)) + geom_point(alpha = 0.2) + geom_smooth() + theme(
+  plot.title = element_text(hjust = 0.5, face = "bold")
+  ) + labs(title = "Median Ride Duration in the Past 12 Months", x = "Year", y = "Median Ride Duration") + scale_color_manual(name = "Membership", labels = c("Casual Memeber", "Annual Member"), values = c("#F8766D", "#00BFC4"))
+
+
+```
+
+```{r}
+
+# Let's create a visualization for average duration
+bicycle_data_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,median_duration = median(ride_length)) %>% na.omit() %>% 
+  arrange(member_casual, weekday)  %>% 
+  ggplot(aes(x = weekday, y = median_duration, fill = member_casual)) +
+  geom_col(position = "dodge") + theme(
+  plot.title = element_text(hjust = 0.5, face = "bold")
+  ) + labs(title = "Median Ride Duration by Day of the Week", x = "Weekday", y = "Median Ride Duration") + scale_fill_manual(name = "Membership", labels = c("Casual Memeber", "Annual Member"), values = c("#F8766D", "#00BFC4"))
+
+
+```
+
+From both visualizations, we see that casual members use bicycles longer than annual members. One possible reason for this could be due to distance. 
+For annual members, they may be more inclined to pay membership fees because they use it more frequently to travel shorter distances, whereas casual members may only need to use it few times to travel long distances. 
+
+```{r}
+# count of annual members vs casual riders
+count_of_riders <- bicycle_data_v2 %>% group_by(member_casual) %>% summarise(count = n()) %>% na.omit()
+knitr::kable(count_of_riders)
+
+```
+
+```{r}
+# ensuring independence assumption (i.e. removing duplicates)
+n_occur <- data.frame(table(bicycle_data_v2$ride_id))
+names(n_occur)[names(n_occur) == "Var1"] <- "ride_id"
+bicycle_data_v2 <- inner_join(bicycle_data_v2, n_occur, by = "ride_id") %>% na.omit()
+
+# testing for normality assumption 
+bicycle_data_v2 %>% filter(member_casual == "member") %>% ggplot(aes(x = distance)) + geom_histogram()
+bicycle_data_v2 %>% filter(member_casual == "casual") %>% ggplot(aes(x = distance)) + geom_histogram()
+
+# testing for equal variances 
+var.test(distance ~  member_casual, data = bicycle_data_v2)
+
+# two sample t-test on casual vs annual members' distance 
+t.test(distance ~ member_casual, data = bicycle_data_v2, alternative = "greater")
+
+```
+```{r}
+# testing for normality assumption 
+bicycle_data_v2 %>% filter(member_casual == "member") %>% ggplot(aes(x = ride_length)) + geom_histogram()
+bicycle_data_v2 %>% filter(member_casual == "casual") %>% ggplot(aes(x = ride_length)) + geom_histogram()
+
+# testing for equal variances 
+var.test(ride_length ~  member_casual, data = bicycle_data_v2)
+
+# two sample t-test on casual vs annual members' distance 
+t.test(ride_length ~ member_casual, data = bicycle_data_v2, alternative = "greater")
+
+```
+
+There are higher count of annual members than casual riders, however, we cannot tell whether annual members use the service more frequently than casual riders..
+
+```{r}
+
+# distance travelled for annual memebers vs casual riders
+# bicycle_data_v2 <- bicycle_data %>% 
+#   # why would cbind work here instead of c()? EXPLORE LATER
+dist_travelled <- bicycle_data %>% group_by(member_casual) %>% summarise(avg_dist = mean(distance)) %>% na.omit()
+knitr::kable(dist_travelled)
+
+
+```
+we see that on average, casual riders do indeed travel further than annual members. 
